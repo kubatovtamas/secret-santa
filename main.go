@@ -98,6 +98,13 @@ type RoomWithParticipantCount struct {
     ParticipantCount int `db:"participant_count"`
 }
 
+type CreateRoomFormData struct {
+    RoomName       string `form:"roomName"`
+    AdminPassword  string `form:"adminPassword"`
+    JoinPassword   string `form:"joinPassword"`
+    Deadline       string `form:"deadline"` // Use string type to capture the datetime-local input
+}
+
 func getAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
     var rooms []RoomWithParticipantCount
     query := `
@@ -111,9 +118,50 @@ func getAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
     return rooms, err
 }
 
+func createNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
+	hashedAdminPassword, err := hashPassword(data.AdminPassword)
+    if err != nil {
+        return 0, err
+    }
+    hashedJoinPassword, err := hashPassword(data.JoinPassword)
+    if err != nil {
+        return 0, err
+    }
+
+	// Parse deadline
+    deadline, err := time.Parse("2006-01-02T15:04", data.Deadline)
+    if err != nil {
+        return 0, err
+    }
+
+	// Prepare SQL query for inserting a new room
+    query := `INSERT INTO room (name, join_password, admin_password, deadline) VALUES ($1, $2, $3, $4) RETURNING id`
+    
+	var roomId int
+    err = db.QueryRow(query, data.RoomName, hashedJoinPassword, hashedAdminPassword, deadline).Scan(&roomId)
+    if err != nil {
+        return -1, err
+    }
+
+    return roomId, nil
+}
+
 // Function to handle the creation of a room
 func createRoom(c *fiber.Ctx) error {
-    return nil
+	var data CreateRoomFormData
+    if err := c.BodyParser(&data); err != nil {
+        log.Println("Error parsing form:", err)
+        return c.Status(fiber.StatusBadRequest).SendString("Error parsing form data")
+    }
+
+    // Log the received data
+    log.Printf("Received room creation data: %+v\n", data)
+
+    // Here you would add logic to insert the room data into the database
+	// encrypt the passwords
+	// insert into database (check if constraints are ok, like unique room name)
+
+    return c.SendString("Room creation data received") // Placeholder response
 }
 
 // Function to handle the joining of a room
@@ -189,9 +237,16 @@ func main() {
 	// Set up Fiber
 	engine := html.New("./views", ".html")
 	app := fiber.New(fiber.Config{Views: engine})
+    
+    app.Use(csrf.New(csrf.Config{ 
+        KeyLookup:         "form:form_csrf", 
+        CookieName:        "csrf_", 
+        ContextKey:        "csrf", 
+        CookieSameSite:    "Lax",
+        Expiration:        24 * time.Hour,
+    }))
 	
-	app.Use(csrf.New()) // Add CSRF middleware
-	app.Use(limiter.New(limiter.Config{
+    app.Use(limiter.New(limiter.Config{
         Max:        100, // max number of requests
         Expiration: 30 * time.Second, // time duration until the limit is reset
     }))
@@ -213,11 +268,17 @@ func main() {
 
 	// Route to serve 'Create Room' modal content
 	app.Get("/create-room", func(c *fiber.Ctx) error {
+		csrfToken := c.Locals("csrf")  // Get CSRF token from context
+
+		log.Println(csrfToken)
 		return c.Render("create-room", fiber.Map{
 			"Title": "Create Room - Secret Santa App",
 			"DefaultDeadline": defaultDeadline,
+			"CSRFToken": csrfToken,
 		})
 	})
+
+	app.Post("/create-room", createRoom)
 
 	err = app.Listen(getPort())
 	if err != nil {
