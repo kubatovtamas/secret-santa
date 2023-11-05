@@ -145,5 +145,9 @@ func main() {
         })
 	})
 	log.Println("4")
-	app.Listen(getPort())
+	
+	err = app.Listen(getPort())
+	if err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
 }
