@@ -11,6 +11,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
+    "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/template/html/v2"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -321,6 +322,7 @@ func main() {
 	// Set up Fiber
 	engine := html.New("./views", ".html")
     app := fiber.New(fiber.Config{Views: engine})
+    app.Use(logger.New())
     app.Use(limiter.New(limiter.Config{
         Max:        100, 
         Expiration: 30 * time.Second, 
