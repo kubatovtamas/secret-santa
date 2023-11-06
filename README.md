@@ -30,9 +30,9 @@ Develop a "Secret Santa" web application for creating and managing gift exchange
 
 ## API Endpoints:
 - POST `/room/create` - Create a room with a password.
-- POST `/room/join` - Join a room with its password.
+- POST `/room/join` - Join a room (password required).
 - GET `/room/list` - List all rooms.
-- GET `/room/{id}/participants` - List participants (password required).
+- GET `/room/{id}` - List participants (password required).
 - DELETE `/room/{id}` - Delete a room (admin or password required).
 - DELETE `/participant/{id}` - Delete a participant (admin or password required).
 
@@ -40,13 +40,11 @@ Develop a "Secret Santa" web application for creating and managing gift exchange
 - `index.html` - Homepage and room listing.
 - `create-room.html` - Room creation form.
 - `join-room.html` - Room joining form.
-- `room-list.html` - List of rooms.
 - `room-detail.html` - Room details and participant list.
-- `admin.html` - Admin management interface.
 
 ## Security Measures:
 - Hashed password storage and HTTPS.
-- CSRF and rate limiting: Fiber
+- Rate limiting: Fiber
 - Input validation for email formats.
 - Email encryption in the database.
 - SQLx parameterized queries for data sanitization.

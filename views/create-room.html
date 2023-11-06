@@ -23,8 +23,6 @@
             <div class="container">
                 <h1>Create a New Room</h1>
                 <form method="post" action="/create-room">
-                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-                    <p>{{.CSRFToken}}</p>
                     <div class="mb-3">
                         <label for="roomName" class="form-label">Room Name</label>
                         <input type="text" class="form-control" id="roomName"
@@ -64,10 +62,3 @@
         </footer>
     </body>
 </html>
-
-<script>
-  window.onload = function() {
-    var csrfToken = document.querySelector('input[name="csrf_token"]').value;
-    console.log("CSRF Token:", csrfToken);
-  };
-</script>
