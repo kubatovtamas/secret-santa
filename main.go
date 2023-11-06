@@ -1,7 +1,7 @@
 package main
 
 import (
-	// "fmt"
+	"fmt"
 	"text/template"
     "bytes"
 	"log"
@@ -17,7 +17,7 @@ import (
 )
 
 const (
-    doDevSetupDB = true // Set to true for development database setup
+    doDevSetupDB = false // Set to true for development database setup
     schemaTemplate = `
         TRUNCATE TABLE room CASCADE;
         TRUNCATE TABLE participant CASCADE;
@@ -114,7 +114,7 @@ type CreateRoomFormData struct {
 /* 
     ##### Data Access Layer
 */
-func dalSetupDatabaseSchema(db *sqlx.DB, config map[string]string) {
+func dbSetupDatabaseSchema(db *sqlx.DB, config map[string]string) {
     tmpl, err := template.New("schema").Parse(schemaTemplate)
     if err != nil {
         log.Fatalf("Error parsing schema template: %v", err)
@@ -130,7 +130,7 @@ func dalSetupDatabaseSchema(db *sqlx.DB, config map[string]string) {
     db.MustExec(schema)
 }
 
-func dalGetAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
+func dbGetAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
     var rooms []RoomWithParticipantCount
     query := `
     SELECT r.*, COUNT(p.id) as participant_count
@@ -143,7 +143,7 @@ func dalGetAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
     return rooms, err
 }
 
-func dalCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
+func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
 	hashedAdminPassword, err := hashPassword(data.AdminPassword)
     if err != nil {
         return 0, err
@@ -175,22 +175,9 @@ func dalCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
 /* 
     ##### Handlers
 */
-// func getIndexHandler(c *fiber.Ctx) error {
-//     rooms, err := dalGetAllRooms(db)
-
-//     if err != nil {
-//         log.Println("Error fetching rooms:", err)
-//         return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
-//     }
-
-//     return c.Render("index", fiber.Map{
-//         "Title": "Secret Santa Rooms",
-//         "Rooms": rooms,
-//     })
-// }
-func getIndexHandler(db *sqlx.DB) fiber.Handler {
+func handlerGetIndex(db *sqlx.DB) fiber.Handler {
     return func(c *fiber.Ctx) error {
-        rooms, err := dalGetAllRooms(db)
+        rooms, err := dbGetAllRooms(db)
 
         if err != nil {
             log.Println("Error fetching rooms:", err)
@@ -205,13 +192,7 @@ func getIndexHandler(db *sqlx.DB) fiber.Handler {
 }
 
 
-// func getCreateRoomHandler(c *fiber.Ctx) error {
-//     return c.Render("create-room", fiber.Map{
-//         "Title": "Create Room - Secret Santa App",
-//         "DefaultDeadline": defaultDeadline,
-//     })
-// }
-func getCreateRoomHandler(defaultDeadline string) fiber.Handler {
+func handlerGetCreateRoom(defaultDeadline string) fiber.Handler {
     return func(c *fiber.Ctx) error {
         return c.Render("create-room", fiber.Map{
             "Title": "Create Room - Secret Santa App",
@@ -220,23 +201,7 @@ func getCreateRoomHandler(defaultDeadline string) fiber.Handler {
     }
 }
 
-// func postCreateRoomHandler(c *fiber.Ctx) error {
-// 	var data CreateRoomFormData
-//     if err := c.BodyParser(&data); err != nil {
-//         log.Println("Error parsing form:", err)
-//         return c.Status(fiber.StatusBadRequest).SendString("Error parsing form data")
-//     }
-
-//     // Log the received data
-//     log.Printf("Received room creation data: %+v\n", data)
-
-//     // Here you would add logic to insert the room data into the database
-// 	// encrypt the passwords
-// 	// insert into database (check if constraints are ok, like unique room name)
-
-//     return c.SendString("Room creation data received") // Placeholder response
-// }
-func postCreateRoomHandler(db *sqlx.DB) fiber.Handler {
+func handlerPostCreateRoom(db *sqlx.DB) fiber.Handler {
     return func(c *fiber.Ctx) error {
         var data CreateRoomFormData
         if err := c.BodyParser(&data); err != nil {
@@ -244,18 +209,17 @@ func postCreateRoomHandler(db *sqlx.DB) fiber.Handler {
             return c.Status(fiber.StatusBadRequest).SendString("Error parsing form data")
         }
 
-        // Log the received data
-        log.Printf("Received room creation data: %+v\n", data)
+        roomId, err := dbCreateNewRoom(db, data)
+        if err != nil {
+            // Handle error appropriately
+            return c.Status(fiber.StatusInternalServerError).SendString("Error creating room")
+        }
 
-        // Here you would add logic to insert the room data into the database
-        // encrypt the passwords
-        // insert into database (check if constraints are ok, like unique room name)
-
-        return c.SendString("Room creation data received") // Placeholder response
+        return c.Redirect(fmt.Sprintf("/room/%d", roomId))
     }
 }
 
-func postJoinRoomHandler(c *fiber.Ctx) error {
+func handlerPostJoinRoom(c *fiber.Ctx) error {
     return nil
 }
 
@@ -316,7 +280,7 @@ func main() {
 
     // Create initial DB schema 
     if doDevSetupDB {
-        dalSetupDatabaseSchema(db, config)	
+        dbSetupDatabaseSchema(db, config)	
     }
 	
 	// Set up Fiber
@@ -329,9 +293,9 @@ func main() {
     }))
 
 	// Set up routes
-	app.Get("/", getIndexHandler(db))
-	app.Get("/create-room", getCreateRoomHandler(defaultDeadline))
-    app.Post("/create-room", postCreateRoomHandler(db))
+	app.Get("/", handlerGetIndex(db))
+	app.Get("/create-room", handlerGetCreateRoom(defaultDeadline))
+    app.Post("/create-room", handlerPostCreateRoom(db))
 
     // Run server
 	err = app.Listen(getPort())
