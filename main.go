@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+    "strconv"
 	"text/template"
     "bytes"
 	"log"
@@ -17,7 +18,7 @@ import (
 )
 
 const (
-    doDevSetupDB = false // Set to true for development database setup
+    doDevSetupDB = false // true for dev db setup
     schemaTemplate = `
         TRUNCATE TABLE room CASCADE;
         TRUNCATE TABLE participant CASCADE;
@@ -95,7 +96,7 @@ type Participant struct {
     Email               string    `db:"email"`
     Name                string    `db:"name"`
     ParticipantPassword string    `db:"participant_password"`
-    AssignedTo          *int      `db:"assigned_to"`
+    AssignedTo          *int      `db:"assigned_to"`  // nullable int
     CreatedAt           time.Time `db:"created_at"`
 }
 
@@ -109,6 +110,12 @@ type CreateRoomFormData struct {
     AdminPassword  string `form:"adminPassword"`
     JoinPassword   string `form:"joinPassword"`
     Deadline       string `form:"deadline"` 
+}
+
+type SignupParticipantData struct {
+    Email               string    `form:"email"`
+    Name                string    `form:"name"`
+    ParticipantPassword string    `form:"participantPassword"`
 }
 
 /* 
@@ -143,6 +150,28 @@ func dbGetAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
     return rooms, err
 }
 
+func dbGetOneRoom(db *sqlx.DB, roomId int) (Room, error) {
+    var room Room
+    query := `
+    SELECT * 
+    FROM room
+    WHERE room.id = $1
+    `
+    err := db.Get(&room, query, roomId)
+    return room, err
+}
+
+func dbGetParticipantsForRoom(db *sqlx.DB, roomId int) ([]Participant, error) {
+    var participants []Participant
+    query := `
+    SELECT *
+    FROM participant
+    WHERE participant.room_id = $1
+    `
+    err := db.Select(&participants, query, roomId)
+    return participants, err
+}
+
 func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
 	hashedAdminPassword, err := hashPassword(data.AdminPassword)
     if err != nil {
@@ -175,7 +204,7 @@ func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
 /* 
     ##### Handlers
 */
-func handlerGetIndex(db *sqlx.DB) fiber.Handler {
+func handleGetIndex(db *sqlx.DB) fiber.Handler {
     return func(c *fiber.Ctx) error {
         rooms, err := dbGetAllRooms(db)
 
@@ -192,7 +221,7 @@ func handlerGetIndex(db *sqlx.DB) fiber.Handler {
 }
 
 
-func handlerGetCreateRoom(defaultDeadline string) fiber.Handler {
+func handleGetCreateRoom(defaultDeadline string) fiber.Handler {
     return func(c *fiber.Ctx) error {
         return c.Render("create-room", fiber.Map{
             "Title": "Create Room - Secret Santa App",
@@ -201,25 +230,51 @@ func handlerGetCreateRoom(defaultDeadline string) fiber.Handler {
     }
 }
 
-func handlerPostCreateRoom(db *sqlx.DB) fiber.Handler {
+func handleGetRoomDetails(db *sqlx.DB) fiber.Handler {
+    return func(c *fiber.Ctx) error {
+        roomId, err := strconv.Atoi(c.Params("id"))
+        if err != nil {
+            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+        }
+
+        var room Room
+        room, err = dbGetOneRoom(db, roomId)
+        if err != nil {
+            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get room with ID: %d. %s", roomId, err))
+        }
+        
+        var participants []Participant
+        participants, err = dbGetParticipantsForRoom(db, roomId)
+        if err != nil {
+            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get participants for room ID: %d. %s", roomId, err))
+        }
+
+        return c.Render("room-details", fiber.Map{
+            "Room":         room,
+            "Participants": participants,
+        })
+    }
+}
+
+func handlePostCreateRoom(db *sqlx.DB) fiber.Handler {
     return func(c *fiber.Ctx) error {
         var data CreateRoomFormData
         if err := c.BodyParser(&data); err != nil {
             log.Println("Error parsing form:", err)
-            return c.Status(fiber.StatusBadRequest).SendString("Error parsing form data")
+            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
         }
 
         roomId, err := dbCreateNewRoom(db, data)
         if err != nil {
             // Handle error appropriately
-            return c.Status(fiber.StatusInternalServerError).SendString("Error creating room")
+            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error creating room: %s", err))
         }
 
-        return c.Redirect(fmt.Sprintf("/room/%d", roomId))
+        return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
     }
 }
 
-func handlerPostJoinRoom(c *fiber.Ctx) error {
+func handlePostJoinRoom(c *fiber.Ctx) error {
     return nil
 }
 
@@ -293,9 +348,10 @@ func main() {
     }))
 
 	// Set up routes
-	app.Get("/", handlerGetIndex(db))
-	app.Get("/create-room", handlerGetCreateRoom(defaultDeadline))
-    app.Post("/create-room", handlerPostCreateRoom(db))
+	app.Get("/", handleGetIndex(db))
+    app.Get("/room-details/:id", handleGetRoomDetails(db))
+	app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
+    app.Post("/create-room", handlePostCreateRoom(db))
 
     // Run server
 	err = app.Listen(getPort())

@@ -27,9 +27,9 @@
                     <li>
                         {{.Name}} - Deadline: {{.Deadline}} - Participants:
                         {{.ParticipantCount}}
-                        <a href="/join-room?roomId={{.ID}}"
+                        <a href="/room-details/{{.ID}}"
                             class="btn btn-secondary">
-                            Join Room
+                            View Room
                         </a>
                     </li>
                     {{end}}
