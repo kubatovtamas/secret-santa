@@ -112,7 +112,7 @@ type CreateRoomFormData struct {
     Deadline       string `form:"deadline"` 
 }
 
-type SignupParticipantData struct {
+type CreateParticipantFormData struct {
     Email               string    `form:"email"`
     Name                string    `form:"name"`
     ParticipantPassword string    `form:"participantPassword"`
@@ -175,18 +175,18 @@ func dbGetParticipantsForRoom(db *sqlx.DB, roomId int) ([]Participant, error) {
 func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
 	hashedAdminPassword, err := hashPassword(data.AdminPassword)
     if err != nil {
-        return 0, err
+        return -1, err
     }
 
     hashedJoinPassword, err := hashPassword(data.JoinPassword)
     if err != nil {
-        return 0, err
+        return -1, err
     }
 
 	// Parse deadline
     deadline, err := time.Parse("2006-01-02T15:04", data.Deadline)
     if err != nil {
-        return 0, err
+        return -1, err
     }
 
 	// Prepare SQL query for inserting a new room
@@ -199,6 +199,37 @@ func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
     }
 
     return roomId, nil
+}
+
+func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId int) (int, error) {
+    hashedParticipantPassword, err := hashPassword(data.ParticipantPassword)
+    if err != nil {
+        return -1, err
+    }
+    
+    hashedEmail, err := hashPassword(data.Email)
+    if err != nil {
+        return -1, err
+    }
+    
+    var participantId int
+    query := `
+    INSERT INTO 
+    participant (
+        room_id,
+        email,
+        name,
+        participant_password
+    )
+    VALUES ($1, $2, $3, $4)
+    RETURNING id
+    `
+    err = db.QueryRow(query, roomId, hashedEmail, data.Name, hashedParticipantPassword).Scan(&participantId)
+    if err != nil {
+        return -1, err
+    }
+
+    return participantId, nil
 }
 
 /* 
@@ -220,15 +251,34 @@ func handleGetIndex(db *sqlx.DB) fiber.Handler {
     }
 }
 
-
 func handleGetCreateRoom(defaultDeadline string) fiber.Handler {
     return func(c *fiber.Ctx) error {
         return c.Render("create-room", fiber.Map{
-            "Title": "Create Room - Secret Santa App",
             "DefaultDeadline": defaultDeadline,
         })
     }
 }
+
+func handlePostCreateRoom(db *sqlx.DB) fiber.Handler {
+    return func(c *fiber.Ctx) error {
+        var data CreateRoomFormData
+        if err := c.BodyParser(&data); err != nil {
+            log.Println("Error parsing form:", err)
+            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
+        }
+
+        roomId, err := dbCreateNewRoom(db, data)
+        if err != nil {
+            // Handle error appropriately
+            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error creating room: %s", err))
+        }
+        
+        log.Println("Created new room with ID:", roomId)
+        return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
+    }
+}
+
+
 
 func handleGetRoomDetails(db *sqlx.DB) fiber.Handler {
     return func(c *fiber.Ctx) error {
@@ -256,26 +306,43 @@ func handleGetRoomDetails(db *sqlx.DB) fiber.Handler {
     }
 }
 
-func handlePostCreateRoom(db *sqlx.DB) fiber.Handler {
+
+func handleGetJoinRoom() fiber.Handler {
     return func(c *fiber.Ctx) error {
-        var data CreateRoomFormData
+        roomId, err := strconv.Atoi(c.Params("id"))
+        if err != nil {
+            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+        }
+
+        return c.Render("join-room", fiber.Map{
+            "Title": "Join Room - Secret Santa App",
+            "roomId": roomId,
+        })
+    }
+}
+
+func handlePostJoinRoom(db *sqlx.DB) fiber.Handler {
+    return func(c *fiber.Ctx) error {
+        roomId, err := strconv.Atoi(c.Params("id"))
+        if err != nil {
+            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+        }
+
+        var data CreateParticipantFormData
         if err := c.BodyParser(&data); err != nil {
             log.Println("Error parsing form:", err)
             return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
         }
-
-        roomId, err := dbCreateNewRoom(db, data)
+        // log.Println(data)
+        participantId, err := dbCreateNewParticipant(db, data, roomId)
         if err != nil {
             // Handle error appropriately
-            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error creating room: %s", err))
+            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error adding participant: %s", err))
         }
 
+        log.Println("Created new participant with ID:", participantId, "for room with ID:", roomId)
         return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
     }
-}
-
-func handlePostJoinRoom(c *fiber.Ctx) error {
-    return nil
 }
 
 /* 
@@ -349,9 +416,13 @@ func main() {
 
 	// Set up routes
 	app.Get("/", handleGetIndex(db))
-    app.Get("/room-details/:id", handleGetRoomDetails(db))
-	app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
+	
+    app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
     app.Post("/create-room", handlePostCreateRoom(db))
+
+    app.Get("/room-details/:id", handleGetRoomDetails(db))
+	app.Get("/room-details/:id/join-room", handleGetJoinRoom())
+    app.Post("/room-details/:id/join-room", handlePostJoinRoom(db))
 
     // Run server
 	err = app.Listen(getPort())
