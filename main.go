@@ -15,10 +15,16 @@ import (
     "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/template/html/v2"
 	"golang.org/x/crypto/bcrypt"
+    "crypto/aes"
+    "crypto/cipher"
+    "crypto/rand"
+    "encoding/hex"
+    "encoding/base64"
+    "io"
 )
 
 const (
-    doDevSetupDB = false // true for dev db setup
+    doDevSetupDB = true // true for dev db setup
     schemaTemplate = `
         TRUNCATE TABLE room CASCADE;
         TRUNCATE TABLE participant CASCADE;
@@ -173,12 +179,12 @@ func dbGetParticipantsForRoom(db *sqlx.DB, roomId int) ([]Participant, error) {
 }
 
 func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
-	hashedAdminPassword, err := hashPassword(data.AdminPassword)
+	hashedAdminPassword, err := hashString(data.AdminPassword)
     if err != nil {
         return -1, err
     }
 
-    hashedJoinPassword, err := hashPassword(data.JoinPassword)
+    hashedJoinPassword, err := hashString(data.JoinPassword)
     if err != nil {
         return -1, err
     }
@@ -201,13 +207,13 @@ func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
     return roomId, nil
 }
 
-func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId int) (int, error) {
-    hashedParticipantPassword, err := hashPassword(data.ParticipantPassword)
+func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId int, encryptionKey []byte) (int, error) {
+    hashedParticipantPassword, err := hashString(data.ParticipantPassword)
     if err != nil {
         return -1, err
     }
     
-    hashedEmail, err := hashPassword(data.Email)
+    encryptedEmail, err := encryptAES(encryptionKey, data.Email)
     if err != nil {
         return -1, err
     }
@@ -224,7 +230,7 @@ func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId 
     VALUES ($1, $2, $3, $4)
     RETURNING id
     `
-    err = db.QueryRow(query, roomId, hashedEmail, data.Name, hashedParticipantPassword).Scan(&participantId)
+    err = db.QueryRow(query, roomId, encryptedEmail, data.Name, hashedParticipantPassword).Scan(&participantId)
     if err != nil {
         return -1, err
     }
@@ -278,9 +284,7 @@ func handlePostCreateRoom(db *sqlx.DB) fiber.Handler {
     }
 }
 
-
-
-func handleGetRoomDetails(db *sqlx.DB) fiber.Handler {
+func handleGetRoomDetails(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
     return func(c *fiber.Ctx) error {
         roomId, err := strconv.Atoi(c.Params("id"))
         if err != nil {
@@ -298,14 +302,23 @@ func handleGetRoomDetails(db *sqlx.DB) fiber.Handler {
         if err != nil {
             return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get participants for room ID: %d. %s", roomId, err))
         }
-
+        
+        for i := range participants {
+            decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
+            if err != nil {
+                // Handle the error, maybe log it or return an error response
+                log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
+                continue // or return, depending on how you want to handle the error
+            }
+            participants[i].Email = decryptedEmail
+        }
+        
         return c.Render("room-details", fiber.Map{
             "Room":         room,
             "Participants": participants,
         })
     }
 }
-
 
 func handleGetJoinRoom() fiber.Handler {
     return func(c *fiber.Ctx) error {
@@ -321,7 +334,7 @@ func handleGetJoinRoom() fiber.Handler {
     }
 }
 
-func handlePostJoinRoom(db *sqlx.DB) fiber.Handler {
+func handlePostJoinRoom(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
     return func(c *fiber.Ctx) error {
         roomId, err := strconv.Atoi(c.Params("id"))
         if err != nil {
@@ -334,7 +347,7 @@ func handlePostJoinRoom(db *sqlx.DB) fiber.Handler {
             return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
         }
         // log.Println(data)
-        participantId, err := dbCreateNewParticipant(db, data, roomId)
+        participantId, err := dbCreateNewParticipant(db, data, roomId, encryptionKey)
         if err != nil {
             // Handle error appropriately
             return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error adding participant: %s", err))
@@ -369,23 +382,82 @@ func getEnvVar(name string) string {
 	return envVar
 }
 
-func hashPassword(password string) (string, error) {
+func hashString(password string) (string, error) {
     bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
     return string(bytes), err
 }
 
-func checkPasswordHash(password, hash string) bool {
+func checkStringHash(password, hash string) bool {
     err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
     return err == nil
+}
+
+func decodeEncryptionKey(encryptionKey string) []byte {
+    decodedKey, err := base64.StdEncoding.DecodeString(encryptionKey)
+    if err != nil {
+        log.Fatalln("Failed to decode encryption key: %v", err)
+    }
+
+    return decodedKey
+}
+
+func encryptAES(key []byte, plaintext string) (string, error) {
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return "", err
+    }
+
+    aesGCM, err := cipher.NewGCM(block)
+    if err != nil {
+        return "", err
+    }
+
+    nonce := make([]byte, aesGCM.NonceSize())
+    if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+        return "", err
+    }
+
+    ciphertext := aesGCM.Seal(nonce, nonce, []byte(plaintext), nil)
+    return hex.EncodeToString(ciphertext), nil
+}
+
+func decryptAES(key []byte, ciphertext string) (string, error) {
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return "", err
+    }
+
+    aesGCM, err := cipher.NewGCM(block)
+    if err != nil {
+        return "", err
+    }
+
+    enc, err := hex.DecodeString(ciphertext)
+    if err != nil {
+        return "", err
+    }
+
+    nonceSize := aesGCM.NonceSize()
+    if len(enc) < nonceSize {
+        return "", err
+    }
+
+    nonce, ciphertextBytes := enc[:nonceSize], enc[nonceSize:]
+    plaintext, err := aesGCM.Open(nil, nonce, ciphertextBytes, nil)
+    if err != nil {
+        return "", err
+    }
+
+    return string(plaintext), nil
 }
 
 func main() {
     // Gen ENV vars
 	connStr := getEnvVar("DATABASE_URL")
-	defaultDeadline := os.Getenv("DEFAULT_DEADLINE")
-    if defaultDeadline == "" {
-		defaultDeadline = "2022-12-01 00:00:00"	
-    }
+    encodedEncryptionKey := getEnvVar("ENCRYPTION_KEY")
+	defaultDeadline := getEnvVar("DEFAULT_DEADLINE")
+
+    decodedEncryptionKey := decodeEncryptionKey(encodedEncryptionKey)
 
     // Create config map 
     config := map[string]string{
@@ -420,9 +492,9 @@ func main() {
     app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
     app.Post("/create-room", handlePostCreateRoom(db))
 
-    app.Get("/room-details/:id", handleGetRoomDetails(db))
+    app.Get("/room-details/:id", handleGetRoomDetails(db, decodedEncryptionKey))
 	app.Get("/room-details/:id/join-room", handleGetJoinRoom())
-    app.Post("/room-details/:id/join-room", handlePostJoinRoom(db))
+    app.Post("/room-details/:id/join-room", handlePostJoinRoom(db, decodedEncryptionKey))
 
     // Run server
 	err = app.Listen(getPort())
