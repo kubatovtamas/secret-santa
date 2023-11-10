@@ -236,6 +236,22 @@ func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId 
     return participantId, nil
 }
 
+func dbGetJoinPasswordForRoom(db *sqlx.DB, roomId int) (string, error) {
+    var storedPasswordHash string
+    query := `
+    SELECT join_password
+    FROM room
+    WHERE id = $1
+    `
+
+    err := db.Get(&storedPasswordHash, query, roomId)
+    if err != nil {
+        return "", nil
+    }
+
+    return storedPasswordHash, nil
+}
+
 /* 
     ##### Handlers
 */
@@ -293,6 +309,16 @@ func handleGetRoomDetails(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
         room, err = dbGetOneRoom(db, roomId)
         if err != nil {
             return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get room with ID: %d. %s", roomId, err))
+        }
+        
+        // New code to check password
+        joinPassword := c.FormValue("joinPassword")
+        hashedJoinPassword, err := dbGetJoinPasswordForRoom(db, roomId) // Implement this function
+        if err != nil {
+            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error joining room, roomId=%d, err=%s", roomId, err))
+        }
+        if !checkStringHash(joinPassword, hashedJoinPassword) {
+            return c.Redirect("/")
         }
         
         var participants []Participant
