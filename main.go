@@ -47,7 +47,6 @@ const (
             email VARCHAR(255),
             name VARCHAR(255),
             participant_password VARCHAR(255) NOT NULL,
-            assigned_to INTEGER REFERENCES participant(id) DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (room_id, email),
             UNIQUE (room_id, name)
@@ -102,7 +101,6 @@ type Participant struct {
     Email               string    `db:"email"`
     Name                string    `db:"name"`
     ParticipantPassword string    `db:"participant_password"`
-    AssignedTo          *int      `db:"assigned_to"`  // nullable int
     CreatedAt           time.Time `db:"created_at"`
 }
 
@@ -303,10 +301,10 @@ func handleGetRoomDetails(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
             return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get participants for room ID: %d. %s", roomId, err))
         }
         
+        // TODO: This is just for testing the decryption, don't actually show the email on the page
         for i := range participants {
             decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
             if err != nil {
-                // Handle the error, maybe log it or return an error response
                 log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
                 continue // or return, depending on how you want to handle the error
             }
