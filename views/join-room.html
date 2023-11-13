@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>{{.Title}}</title>
+        <script src="https://unpkg.com/htmx.org@1.9.4"></script>
+        <link
+            href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0/dist/css/bootstrap.min.css"
+            rel="stylesheet">
+    </head>
+    <body>
+        <header>
+            <!-- Common header content -->
+            <nav class="navbar navbar-expand-lg navbar-light bg-light">
+                <div class="container-fluid">
+                    <a class="navbar-brand" href="/">Secret Santa Application</a>
+                </div>
+            </nav>
+        </header>
+
+        <main class="container">
+            <div class="container">
+                <h1>Join Room</h1>
+                <form method="post" action="/room-details/{{.roomId}}/join-room">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Your Name</label>
+                        <input type="text" class="form-control" id="name"
+                            name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="email" class="form-label">Your Email</label>
+                        <input type="email" class="form-control" id="email"
+                            name="email" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="participantPassword" class="form-label">Your Password</label>
+                        <input type="password" class="form-control"
+                            id="participantPassword"
+                            name="participantPassword" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Join</button>
+                </form>
+            </div>
+        </main>
+
+        <footer>
+            <!-- Common footer content -->
+            <div class="text-center py-4">
+                © 2023 Secret Santa App
+            </div>
+        </footer>
+        
+        <script
+            src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0/dist/js/bootstrap.bundle.min.js">
+        </script>
+    </body>
+</html>
