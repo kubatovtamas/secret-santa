@@ -32,19 +32,10 @@
                     <li>
                         {{.Name}} - Deadline: {{.Deadline}} - Participants:
                         {{.ParticipantCount}}
-                        <!-- <a href="/room-details/{{.ID}}"
-                            class="btn btn-secondary">
-                            View Room
-                        </a> -->
-                        
                         <a href="#" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#passwordModal" 
                             onclick="setJoinRoomAction(this, {{.ID}})">
                             View Room
                         </a>
-
-                        <!-- <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#exampleModal">
-                            Launch demo modal
-                        </button> -->
                     </li>
                     {{end}}
                 </ul>
@@ -60,34 +51,17 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <form id="joinRoomForm" method="get">
+                        <form id="joinRoomForm" method="post">
                             <input type="password" class="form-control" id="joinPassword" name="joinPassword" placeholder="Join Password" required>
                         </form>
                     </div>
-                    <div class="modal-footer">
+                    <div class="modal-footer" action="/verify-room-access/ROOM_ID_PLACEHOLDER">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                         <button type="submit" form="joinRoomForm" class="btn btn-primary">View Room</button>
                     </div>
                 </div>
             </div>
         </div> 
-        <!-- <div class="modal fade" id="exampleModal" tabindex="-1" aria-labelledby="exampleModalLabel" aria-hidden="true">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="exampleModalLabel">Modal title</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    ...
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary">Save changes</button>
-                </div>
-                </div>
-            </div>
-        </div> -->
 
         <footer>
             <!-- Common footer content -->

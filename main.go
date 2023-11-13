@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
     "github.com/gofiber/fiber/v2/middleware/logger"
+    "github.com/gofiber/fiber/v2/middleware/session"
 	"github.com/gofiber/template/html/v2"
 	"golang.org/x/crypto/bcrypt"
     "crypto/aes"
@@ -187,13 +188,11 @@ func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
         return -1, err
     }
 
-	// Parse deadline
     deadline, err := time.Parse("2006-01-02T15:04", data.Deadline)
     if err != nil {
         return -1, err
     }
 
-	// Prepare SQL query for inserting a new room
     query := `INSERT INTO room (name, join_password, admin_password, deadline) VALUES ($1, $2, $3, $4) RETURNING id`
     
 	var roomId int
@@ -298,27 +297,22 @@ func handlePostCreateRoom(db *sqlx.DB) fiber.Handler {
     }
 }
 
-func handleGetRoomDetails(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
+func handleGetRoomDetails(db *sqlx.DB, store *session.Store) fiber.Handler {
     return func(c *fiber.Ctx) error {
         roomId, err := strconv.Atoi(c.Params("id"))
         if err != nil {
             return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
         }
 
+        sess, err := store.Get(c)
+        if err != nil || sess.Get("roomAccess") != roomId {
+            return c.Redirect("/")
+        }
+
         var room Room
         room, err = dbGetOneRoom(db, roomId)
         if err != nil {
             return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get room with ID: %d. %s", roomId, err))
-        }
-        
-        // New code to check password
-        joinPassword := c.FormValue("joinPassword")
-        hashedJoinPassword, err := dbGetJoinPasswordForRoom(db, roomId) // Implement this function
-        if err != nil {
-            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error joining room, roomId=%d, err=%s", roomId, err))
-        }
-        if !checkStringHash(joinPassword, hashedJoinPassword) {
-            return c.Redirect("/")
         }
         
         var participants []Participant
@@ -328,19 +322,43 @@ func handleGetRoomDetails(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
         }
         
         // TODO: This is just for testing the decryption, don't actually show the email on the page
-        for i := range participants {
-            decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
-            if err != nil {
-                log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
-                continue // or return, depending on how you want to handle the error
-            }
-            participants[i].Email = decryptedEmail
-        }
+        // for i := range participants {
+        //     decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
+        //     if err != nil {
+        //         log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
+        //         continue // or return, depending on how you want to handle the error
+        //     }
+        //     participants[i].Email = decryptedEmail
+        // }
         
         return c.Render("room-details", fiber.Map{
             "Room":         room,
             "Participants": participants,
         })
+    }
+}
+
+func handlePostRoomDetails(db *sqlx.DB, store *session.Store) fiber.Handler {
+    return func(c *fiber.Ctx) error {
+        roomId, err := strconv.Atoi(c.Params("id"))
+        if err != nil {
+            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+        }
+        
+        joinPassword := c.FormValue("joinPassword")
+        hashedJoinPassword, err := dbGetJoinPasswordForRoom(db, roomId) // Implement this function
+        if err != nil {
+            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error joining room, roomId=%d, err=%s", roomId, err))
+        }
+
+        if checkStringHash(joinPassword, hashedJoinPassword) {
+            sess, _ := store.Get(c)
+            sess.Set("roomAccess", roomId)
+            sess.Save()
+            return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
+        } else {
+            return c.Redirect("/")
+        }
     }
 }
 
@@ -503,7 +521,10 @@ func main() {
 	
 	// Set up Fiber
 	engine := html.New("./views", ".html")
+    var store *session.Store
+    store = session.New()
     app := fiber.New(fiber.Config{Views: engine})
+    
     app.Use(logger.New())
     app.Use(limiter.New(limiter.Config{
         Max:        100, 
@@ -513,10 +534,12 @@ func main() {
 	// Set up routes
 	app.Get("/", handleGetIndex(db))
 	
+    app.Get("/room-details/:id", handleGetRoomDetails(db, store))
+    app.Post("/room-details/:id", handlePostRoomDetails(db, store))
+
     app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
     app.Post("/create-room", handlePostCreateRoom(db))
 
-    app.Get("/room-details/:id", handleGetRoomDetails(db, decodedEncryptionKey))
 	app.Get("/room-details/:id/join-room", handleGetJoinRoom())
     app.Post("/room-details/:id/join-room", handlePostJoinRoom(db, decodedEncryptionKey))
 
