@@ -1,32 +1,34 @@
 package main
 
 import (
+    "errors"
+    mRand "math/rand"
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
-    "strconv"
-	"text/template"
-    "bytes"
-	"log"
-	"os"
-    "time"
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
-    "github.com/gofiber/fiber/v2/middleware/logger"
-    "github.com/gofiber/fiber/v2/middleware/session"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/session"
 	"github.com/gofiber/template/html/v2"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
-    "crypto/aes"
-    "crypto/cipher"
-    "crypto/rand"
-    "encoding/hex"
-    "encoding/base64"
-    "io"
+	"io"
+	"log"
+	"os"
+	"strconv"
+	"text/template"
+	"time"
 )
 
 const (
-    doDevSetupDB = true // true for dev db setup
-    schemaTemplate = `
+	doDevSetupDB   = true // true for dev db setup
+	schemaTemplate = `
         TRUNCATE TABLE room CASCADE;
         TRUNCATE TABLE participant CASCADE;
 
@@ -84,139 +86,144 @@ const (
     `
 )
 
-/* 
-    ##### Models
+/*
+   ##### Models
 */
 type Room struct {
-    ID            int       `db:"id"`
-    Name          string    `db:"name"`
-    JoinPassword  string    `db:"join_password"`
-    AdminPassword string    `db:"admin_password"`
-    Deadline      time.Time `db:"deadline"`
-    CreatedAt     time.Time `db:"created_at"`
+	ID            int       `db:"id"`
+	Name          string    `db:"name"`
+	JoinPassword  string    `db:"join_password"`
+	AdminPassword string    `db:"admin_password"`
+	Deadline      time.Time `db:"deadline"`
+	CreatedAt     time.Time `db:"created_at"`
 }
 
 type Participant struct {
-    ID                  int       `db:"id"`
-    RoomID              int       `db:"room_id"`
-    Email               string    `db:"email"`
-    Name                string    `db:"name"`
-    ParticipantPassword string    `db:"participant_password"`
-    CreatedAt           time.Time `db:"created_at"`
+	ID                  int       `db:"id"`
+	RoomID              int       `db:"room_id"`
+	Email               string    `db:"email"`
+	Name                string    `db:"name"`
+	ParticipantPassword string    `db:"participant_password"`
+	CreatedAt           time.Time `db:"created_at"`
 }
 
 type RoomWithParticipantCount struct {
-    Room
-    ParticipantCount int `db:"participant_count"`
+	Room
+	ParticipantCount int `db:"participant_count"`
 }
 
 type CreateRoomFormData struct {
-    RoomName       string `form:"roomName"`
-    AdminPassword  string `form:"adminPassword"`
-    JoinPassword   string `form:"joinPassword"`
-    Deadline       string `form:"deadline"` 
+	RoomName      string `form:"roomName"`
+	AdminPassword string `form:"adminPassword"`
+	JoinPassword  string `form:"joinPassword"`
+	Deadline      string `form:"deadline"`
 }
 
 type CreateParticipantFormData struct {
-    Email               string    `form:"email"`
-    Name                string    `form:"name"`
-    ParticipantPassword string    `form:"participantPassword"`
+	Email               string `form:"email"`
+	Name                string `form:"name"`
+	ParticipantPassword string `form:"participantPassword"`
 }
 
-/* 
-    ##### Data Access Layer
+type Assignment struct {
+	Participant      Participant
+	GifteeName       string
+}
+
+/*
+   ##### Data Access Layer
 */
 func dbSetupDatabaseSchema(db *sqlx.DB, config map[string]string) {
-    tmpl, err := template.New("schema").Parse(schemaTemplate)
-    if err != nil {
-        log.Fatalf("Error parsing schema template: %v", err)
-    }
+	tmpl, err := template.New("schema").Parse(schemaTemplate)
+	if err != nil {
+		log.Fatalf("Error parsing schema template: %v", err)
+	}
 
-    var schemaBuffer bytes.Buffer
-    err = tmpl.Execute(&schemaBuffer, config)
-    if err != nil {
-        log.Fatalf("Error executing schema template: %v", err)
-    }
+	var schemaBuffer bytes.Buffer
+	err = tmpl.Execute(&schemaBuffer, config)
+	if err != nil {
+		log.Fatalf("Error executing schema template: %v", err)
+	}
 
-    schema := schemaBuffer.String()
-    db.MustExec(schema)
+	schema := schemaBuffer.String()
+	db.MustExec(schema)
 }
 
 func dbGetAllRooms(db *sqlx.DB) ([]RoomWithParticipantCount, error) {
-    var rooms []RoomWithParticipantCount
-    query := `
+	var rooms []RoomWithParticipantCount
+	query := `
     SELECT r.*, COUNT(p.id) as participant_count
     FROM room r
     LEFT JOIN participant p ON r.id = p.room_id
     GROUP BY r.id
 	ORDER BY r.created_at DESC
     `
-    err := db.Select(&rooms, query)
-    return rooms, err
+	err := db.Select(&rooms, query)
+	return rooms, err
 }
 
 func dbGetOneRoom(db *sqlx.DB, roomId int) (Room, error) {
-    var room Room
-    query := `
+	var room Room
+	query := `
     SELECT * 
     FROM room
     WHERE room.id = $1
     `
-    err := db.Get(&room, query, roomId)
-    return room, err
+	err := db.Get(&room, query, roomId)
+	return room, err
 }
 
 func dbGetParticipantsForRoom(db *sqlx.DB, roomId int) ([]Participant, error) {
-    var participants []Participant
-    query := `
+	var participants []Participant
+	query := `
     SELECT *
     FROM participant
     WHERE participant.room_id = $1
     `
-    err := db.Select(&participants, query, roomId)
-    return participants, err
+	err := db.Select(&participants, query, roomId)
+	return participants, err
 }
 
 func dbCreateNewRoom(db *sqlx.DB, data CreateRoomFormData) (int, error) {
 	hashedAdminPassword, err := hashString(data.AdminPassword)
-    if err != nil {
-        return -1, err
-    }
+	if err != nil {
+		return -1, err
+	}
 
-    hashedJoinPassword, err := hashString(data.JoinPassword)
-    if err != nil {
-        return -1, err
-    }
+	hashedJoinPassword, err := hashString(data.JoinPassword)
+	if err != nil {
+		return -1, err
+	}
 
-    deadline, err := time.Parse("2006-01-02T15:04", data.Deadline)
-    if err != nil {
-        return -1, err
-    }
+	deadline, err := time.Parse("2006-01-02T15:04", data.Deadline)
+	if err != nil {
+		return -1, err
+	}
 
-    query := `INSERT INTO room (name, join_password, admin_password, deadline) VALUES ($1, $2, $3, $4) RETURNING id`
-    
+	query := `INSERT INTO room (name, join_password, admin_password, deadline) VALUES ($1, $2, $3, $4) RETURNING id`
+
 	var roomId int
-    err = db.QueryRow(query, data.RoomName, hashedJoinPassword, hashedAdminPassword, deadline).Scan(&roomId)
-    if err != nil {
-        return -1, err
-    }
+	err = db.QueryRow(query, data.RoomName, hashedJoinPassword, hashedAdminPassword, deadline).Scan(&roomId)
+	if err != nil {
+		return -1, err
+	}
 
-    return roomId, nil
+	return roomId, nil
 }
 
 func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId int, encryptionKey []byte) (int, error) {
-    hashedParticipantPassword, err := hashString(data.ParticipantPassword)
-    if err != nil {
-        return -1, err
-    }
-    
-    encryptedEmail, err := encryptAES(encryptionKey, data.Email)
-    if err != nil {
-        return -1, err
-    }
-    
-    var participantId int
-    query := `
+	hashedParticipantPassword, err := hashString(data.ParticipantPassword)
+	if err != nil {
+		return -1, err
+	}
+
+	encryptedEmail, err := encryptAES(encryptionKey, data.Email)
+	if err != nil {
+		return -1, err
+	}
+
+	var participantId int
+	query := `
     INSERT INTO 
     participant (
         room_id,
@@ -227,182 +234,211 @@ func dbCreateNewParticipant(db *sqlx.DB, data CreateParticipantFormData, roomId 
     VALUES ($1, $2, $3, $4)
     RETURNING id
     `
-    err = db.QueryRow(query, roomId, encryptedEmail, data.Name, hashedParticipantPassword).Scan(&participantId)
-    if err != nil {
-        return -1, err
-    }
+	err = db.QueryRow(query, roomId, encryptedEmail, data.Name, hashedParticipantPassword).Scan(&participantId)
+	if err != nil {
+		return -1, err
+	}
 
-    return participantId, nil
+	return participantId, nil
 }
 
 func dbGetJoinPasswordForRoom(db *sqlx.DB, roomId int) (string, error) {
-    var storedPasswordHash string
-    query := `
+	var storedPasswordHash string
+	query := `
     SELECT join_password
     FROM room
     WHERE id = $1
     `
 
-    err := db.Get(&storedPasswordHash, query, roomId)
-    if err != nil {
-        return "", nil
-    }
+	err := db.Get(&storedPasswordHash, query, roomId)
+	if err != nil {
+		return "", nil
+	}
 
-    return storedPasswordHash, nil
+	return storedPasswordHash, nil
 }
 
-/* 
-    ##### Handlers
+/*
+   ##### Handlers
 */
 func handleGetIndex(db *sqlx.DB) fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        rooms, err := dbGetAllRooms(db)
+	return func(c *fiber.Ctx) error {
+		rooms, err := dbGetAllRooms(db)
 
-        if err != nil {
-            log.Println("Error fetching rooms:", err)
-            return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
-        }
+		if err != nil {
+			log.Println("Error fetching rooms:", err)
+			return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
+		}
 
-        return c.Render("index", fiber.Map{
-            "Title": "Secret Santa Rooms",
-            "Rooms": rooms,
-        })
-    }
+		return c.Render("index", fiber.Map{
+			"Title": "Secret Santa Rooms",
+			"Rooms": rooms,
+		})
+	}
 }
 
 func handleGetCreateRoom(defaultDeadline string) fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        return c.Render("create-room", fiber.Map{
-            "DefaultDeadline": defaultDeadline,
-        })
-    }
+	return func(c *fiber.Ctx) error {
+		return c.Render("create-room", fiber.Map{
+			"DefaultDeadline": defaultDeadline,
+		})
+	}
 }
 
 func handlePostCreateRoom(db *sqlx.DB) fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        var data CreateRoomFormData
-        if err := c.BodyParser(&data); err != nil {
-            log.Println("Error parsing form:", err)
-            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
-        }
+	return func(c *fiber.Ctx) error {
+		var data CreateRoomFormData
+		if err := c.BodyParser(&data); err != nil {
+			log.Println("Error parsing form:", err)
+			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
+		}
 
-        roomId, err := dbCreateNewRoom(db, data)
-        if err != nil {
-            // Handle error appropriately
-            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error creating room: %s", err))
-        }
-        
-        log.Println("Created new room with ID:", roomId)
-        return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
-    }
+		roomId, err := dbCreateNewRoom(db, data)
+		if err != nil {
+			// Handle error appropriately
+			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error creating room: %s", err))
+		}
+
+		log.Println("Created new room with ID:", roomId)
+		return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
+	}
 }
 
 func handleGetRoomDetails(db *sqlx.DB, store *session.Store) fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        roomId, err := strconv.Atoi(c.Params("id"))
-        if err != nil {
-            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
-        }
+	return func(c *fiber.Ctx) error {
+		roomId, err := strconv.Atoi(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+		}
 
-        sess, err := store.Get(c)
-        if err != nil || sess.Get("roomAccess") != roomId {
-            return c.Redirect("/")
-        }
+		sess, err := store.Get(c)
+		if err != nil || sess.Get("roomAccess") != roomId {
+			return c.Redirect("/")
+		}
 
-        var room Room
-        room, err = dbGetOneRoom(db, roomId)
-        if err != nil {
-            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get room with ID: %d. %s", roomId, err))
-        }
-        
-        var participants []Participant
-        participants, err = dbGetParticipantsForRoom(db, roomId)
-        if err != nil {
-            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get participants for room ID: %d. %s", roomId, err))
-        }
-        
-        // TODO: This is just for testing the decryption, don't actually show the email on the page
-        // for i := range participants {
-        //     decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
-        //     if err != nil {
-        //         log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
-        //         continue // or return, depending on how you want to handle the error
-        //     }
-        //     participants[i].Email = decryptedEmail
-        // }
-        
-        return c.Render("room-details", fiber.Map{
-            "Room":         room,
-            "Participants": participants,
-        })
-    }
+		var room Room
+		room, err = dbGetOneRoom(db, roomId)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get room with ID: %d. %s", roomId, err))
+		}
+
+		var participants []Participant
+		participants, err = dbGetParticipantsForRoom(db, roomId)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get participants for room ID: %d. %s", roomId, err))
+		}
+
+		// TODO: This is just for testing the decryption, don't actually show the email on the page
+		// for i := range participants {
+		//     decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
+		//     if err != nil {
+		//         log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
+		//         continue // or return, depending on how you want to handle the error
+		//     }
+		//     participants[i].Email = decryptedEmail
+		// }
+
+		return c.Render("room-details", fiber.Map{
+			"Room":         room,
+			"Participants": participants,
+		})
+	}
 }
 
 func handlePostRoomDetails(db *sqlx.DB, store *session.Store) fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        roomId, err := strconv.Atoi(c.Params("id"))
-        if err != nil {
-            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
-        }
-        
-        joinPassword := c.FormValue("joinPassword")
-        hashedJoinPassword, err := dbGetJoinPasswordForRoom(db, roomId) // Implement this function
-        if err != nil {
-            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error joining room, roomId=%d, err=%s", roomId, err))
-        }
+	return func(c *fiber.Ctx) error {
+		roomId, err := strconv.Atoi(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+		}
 
-        if checkStringHash(joinPassword, hashedJoinPassword) {
-            sess, _ := store.Get(c)
-            sess.Set("roomAccess", roomId)
-            sess.Save()
-            return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
-        } else {
-            return c.Redirect("/")
-        }
-    }
+		joinPassword := c.FormValue("joinPassword")
+		hashedJoinPassword, err := dbGetJoinPasswordForRoom(db, roomId) // Implement this function
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error joining room, roomId=%d, err=%s", roomId, err))
+		}
+
+		if checkStringHash(joinPassword, hashedJoinPassword) {
+			sess, _ := store.Get(c)
+			sess.Set("roomAccess", roomId)
+			sess.Save()
+			return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
+		} else {
+			return c.Redirect("/")
+		}
+	}
 }
 
 func handleGetJoinRoom() fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        roomId, err := strconv.Atoi(c.Params("id"))
-        if err != nil {
-            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
-        }
+	return func(c *fiber.Ctx) error {
+		roomId, err := strconv.Atoi(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+		}
 
-        return c.Render("join-room", fiber.Map{
-            "Title": "Join Room - Secret Santa App",
-            "roomId": roomId,
-        })
-    }
+		return c.Render("join-room", fiber.Map{
+			"Title":  "Join Room - Secret Santa App",
+			"roomId": roomId,
+		})
+	}
 }
 
 func handlePostJoinRoom(db *sqlx.DB, encryptionKey []byte) fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        roomId, err := strconv.Atoi(c.Params("id"))
-        if err != nil {
-            return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
-        }
+	return func(c *fiber.Ctx) error {
+		roomId, err := strconv.Atoi(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString("Invalid room ID")
+		}
 
-        var data CreateParticipantFormData
-        if err := c.BodyParser(&data); err != nil {
-            log.Println("Error parsing form:", err)
-            return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
-        }
-        // log.Println(data)
-        participantId, err := dbCreateNewParticipant(db, data, roomId, encryptionKey)
-        if err != nil {
-            // Handle error appropriately
-            return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error adding participant: %s", err))
-        }
+		var data CreateParticipantFormData
+		if err := c.BodyParser(&data); err != nil {
+			log.Println("Error parsing form:", err)
+			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error parsing form data: %s", err))
+		}
+		// log.Println(data)
+		participantId, err := dbCreateNewParticipant(db, data, roomId, encryptionKey)
+		if err != nil {
+			// Handle error appropriately
+			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Error adding participant: %s", err))
+		}
 
-        log.Println("Created new participant with ID:", participantId, "for room with ID:", roomId)
-        return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
-    }
+		log.Println("Created new participant with ID:", participantId, "for room with ID:", roomId)
+		return c.Redirect(fmt.Sprintf("/room-details/%d", roomId))
+	}
 }
 
-/* 
-    ##### Utils
+/*
+   ##### Utils
 */
+func AssignSecretSanta(participants []Participant) ([]Assignment, error) {
+    if len(participants) < 2 {
+        return nil, errors.New("a minimum of 2 participants is required")
+    }
+
+    // Create a list of Assignments
+    assignments := make([]Assignment, len(participants))
+    for i, p := range participants {
+        assignments[i] = Assignment{
+            Participant: p, 
+            GifteeName: p.Name, 
+        }
+    }
+
+    // Randomly shuffle the list.
+    mRand.Seed(time.Now().UnixNano())
+    mRand.Shuffle(len(assignments), func(i, j int) { 
+        assignments[i], assignments[j] = assignments[j], assignments[i] 
+    })
+
+    // Shift the giftees by one
+    for i := 0; i < len(assignments); i++ {
+        gifteeIdx := (i + 1) % len(assignments)
+        assignments[i].GifteeName = assignments[gifteeIdx].Participant.Name
+    }
+
+    return assignments, nil
+}
+
 func getPort() string {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -415,8 +451,8 @@ func getPort() string {
 }
 
 func getEnvVar(name string) string {
-	envVar, ok := os.LookupEnv(name) 
- 
+	envVar, ok := os.LookupEnv(name)
+
 	if !ok {
 		log.Fatalln("No such environment variable available: ", name)
 	}
@@ -425,125 +461,128 @@ func getEnvVar(name string) string {
 }
 
 func hashString(password string) (string, error) {
-    bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
-    return string(bytes), err
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
 }
 
 func checkStringHash(password, hash string) bool {
-    err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-    return err == nil
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }
 
 func decodeEncryptionKey(encryptionKey string) []byte {
-    decodedKey, err := base64.StdEncoding.DecodeString(encryptionKey)
-    if err != nil {
-        log.Fatalln("Failed to decode encryption key: %v", err)
-    }
+	decodedKey, err := base64.StdEncoding.DecodeString(encryptionKey)
+	if err != nil {
+		log.Fatalln("Failed to decode encryption key:", err)
+	}
 
-    return decodedKey
+	return decodedKey
 }
 
 func encryptAES(key []byte, plaintext string) (string, error) {
-    block, err := aes.NewCipher(key)
-    if err != nil {
-        return "", err
-    }
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
 
-    aesGCM, err := cipher.NewGCM(block)
-    if err != nil {
-        return "", err
-    }
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
 
-    nonce := make([]byte, aesGCM.NonceSize())
-    if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-        return "", err
-    }
+	nonce := make([]byte, aesGCM.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
 
-    ciphertext := aesGCM.Seal(nonce, nonce, []byte(plaintext), nil)
-    return hex.EncodeToString(ciphertext), nil
+	ciphertext := aesGCM.Seal(nonce, nonce, []byte(plaintext), nil)
+	return hex.EncodeToString(ciphertext), nil
 }
 
 func decryptAES(key []byte, ciphertext string) (string, error) {
-    block, err := aes.NewCipher(key)
-    if err != nil {
-        return "", err
-    }
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
 
-    aesGCM, err := cipher.NewGCM(block)
-    if err != nil {
-        return "", err
-    }
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
 
-    enc, err := hex.DecodeString(ciphertext)
-    if err != nil {
-        return "", err
-    }
+	enc, err := hex.DecodeString(ciphertext)
+	if err != nil {
+		return "", err
+	}
 
-    nonceSize := aesGCM.NonceSize()
-    if len(enc) < nonceSize {
-        return "", err
-    }
+	nonceSize := aesGCM.NonceSize()
+	if len(enc) < nonceSize {
+		return "", err
+	}
 
-    nonce, ciphertextBytes := enc[:nonceSize], enc[nonceSize:]
-    plaintext, err := aesGCM.Open(nil, nonce, ciphertextBytes, nil)
-    if err != nil {
-        return "", err
-    }
+	nonce, ciphertextBytes := enc[:nonceSize], enc[nonceSize:]
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertextBytes, nil)
+	if err != nil {
+		return "", err
+	}
 
-    return string(plaintext), nil
+	return string(plaintext), nil
 }
 
+/*
+   ##### Main
+*/
 func main() {
-    // Gen ENV vars
+	// Gen ENV vars
 	connStr := getEnvVar("DATABASE_URL")
-    encodedEncryptionKey := getEnvVar("ENCRYPTION_KEY")
+	encodedEncryptionKey := getEnvVar("ENCRYPTION_KEY")
 	defaultDeadline := getEnvVar("DEFAULT_DEADLINE")
 
-    decodedEncryptionKey := decodeEncryptionKey(encodedEncryptionKey)
+	decodedEncryptionKey := decodeEncryptionKey(encodedEncryptionKey)
 
-    // Create config map 
-    config := map[string]string{
-        "DefaultDeadline": defaultDeadline,
-    }
+	// Create config map
+	config := map[string]string{
+		"DefaultDeadline": defaultDeadline,
+	}
 
 	// Connect to PostgreSQL
 	db, err := sqlx.Connect("postgres", connStr)
-    defer db.Close()
+	defer db.Close()
 
-    if err != nil {
+	if err != nil {
 		log.Fatalln(err)
-	} 
+	}
 
-    // Create initial DB schema 
-    if doDevSetupDB {
-        dbSetupDatabaseSchema(db, config)	
-    }
-	
+	// Create initial DB schema
+	if doDevSetupDB {
+		dbSetupDatabaseSchema(db, config)
+	}
+
 	// Set up Fiber
 	engine := html.New("./views", ".html")
-    var store *session.Store
-    store = session.New()
-    app := fiber.New(fiber.Config{Views: engine})
-    
-    app.Use(logger.New())
-    app.Use(limiter.New(limiter.Config{
-        Max:        100, 
-        Expiration: 30 * time.Second, 
-    }))
+	var store *session.Store
+	store = session.New()
+	app := fiber.New(fiber.Config{Views: engine})
+
+	app.Use(logger.New())
+	app.Use(limiter.New(limiter.Config{
+		Max:        100,
+		Expiration: 30 * time.Second,
+	}))
 
 	// Set up routes
 	app.Get("/", handleGetIndex(db))
-	
-    app.Get("/room-details/:id", handleGetRoomDetails(db, store))
-    app.Post("/room-details/:id", handlePostRoomDetails(db, store))
 
-    app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
-    app.Post("/create-room", handlePostCreateRoom(db))
+	app.Get("/room-details/:id", handleGetRoomDetails(db, store))
+	app.Post("/room-details/:id", handlePostRoomDetails(db, store))
+
+	app.Get("/create-room", handleGetCreateRoom(defaultDeadline))
+	app.Post("/create-room", handlePostCreateRoom(db))
 
 	app.Get("/room-details/:id/join-room", handleGetJoinRoom())
-    app.Post("/room-details/:id/join-room", handlePostJoinRoom(db, decodedEncryptionKey))
+	app.Post("/room-details/:id/join-room", handlePostJoinRoom(db, decodedEncryptionKey))
 
-    // Run server
+	// Run server
 	err = app.Listen(getPort())
 	if err != nil {
 		log.Fatalf("Error starting server: %v", err)
