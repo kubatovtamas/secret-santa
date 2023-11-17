@@ -456,7 +456,8 @@ func sendEmail(assignment Assignment) error {
 
 func startScheduler(db *sqlx.DB, encryptionKey []byte) {
     c := cron.New()
-    c.AddFunc("0 * * * *", func() {
+    // c.AddFunc("0 * * * *", func() {
+    c.AddFunc("@every 1m", func() {
         now := time.Now().UTC().Add(time.Hour)
 		log.Println("Scheduler run:", now)
         rooms, err := dbGetAllRooms(db)
@@ -508,7 +509,10 @@ func startScheduler(db *sqlx.DB, encryptionKey []byte) {
                 log.Println("Emails sent for the draw")
 
                 // Update room to indicate draw is completed
-				dbSetRoomToDrawCompleted(db, room.ID)
+				err := dbSetRoomToDrawCompleted(db, room.ID)
+				if err != nil {
+					log.Printf("Error in setting room", room.ID, "status to completed")
+				}
             }
         }
     })
