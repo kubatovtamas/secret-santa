@@ -509,7 +509,7 @@ func startScheduler(db *sqlx.DB, encryptionKey []byte) {
                 log.Println("Emails sent for the draw")
 
                 // Update room to indicate draw is completed
-				err := dbSetRoomToDrawCompleted(db, room.ID)
+				err = dbSetRoomToDrawCompleted(db, room.ID)
 				if err != nil {
 					log.Printf("Error in setting room", room.ID, "status to completed")
 				}
