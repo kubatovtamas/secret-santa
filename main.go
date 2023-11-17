@@ -259,7 +259,7 @@ func handleGetIndex(db *sqlx.DB) fiber.Handler {
 		}
 
 		return c.Render("index", fiber.Map{
-			"Title": "Secret Santa Rooms",
+			"Title": "Titkowos Mikuwulás Főoldal",
 			"Rooms": rooms,
 		})
 	}
