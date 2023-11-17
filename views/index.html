@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+    <meta charset="UTF-8">
     <head>
         <title>{{.Title}}</title>
         <script src="https://unpkg.com/htmx.org@1.9.4"></script>
@@ -12,6 +13,20 @@
                 var form = document.getElementById('joinRoomForm');
                 form.action = '/room-details/' + roomId;
             }
+            
+            function formatDate(dateStr) {
+                var date = new Date(dateStr);
+                date.setHours(date.getHours() - 1); // Subtract 1 hour
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+            }
+
+            window.onload = function() {
+                var deadlines = document.querySelectorAll('.deadline');
+                deadlines.forEach(function(elem) {
+                    var formattedDate = formatDate(elem.textContent);
+                    elem.textContent = formattedDate;
+                });
+            };            
         </script>
     </head>
     <body>
@@ -26,11 +41,11 @@
 
         <main class="container">
             <div class="container">
-                <h1>Szia urak</h1>
+                <h1>Szowobák 🎅</h1>
                 <ul id="room-list">
                     {{range .Rooms}}
                     <li>
-                        {{.Name}} - Deadline: {{.Deadline}} - Participants:
+                        {{.Name}} - Deadline: <span class="deadline">{{.Deadline}}</span> - Participants:
                         {{.ParticipantCount}}
                         <a href="#" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#passwordModal" 
                             onclick="setJoinRoomAction(this, {{.ID}})">

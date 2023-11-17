@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	doDevSetupDB   = true // true for dev db setup
+	doDevSetupDB   = false 
 	schemaTemplate = `
         TRUNCATE TABLE room CASCADE;
         TRUNCATE TABLE participant CASCADE;
@@ -316,16 +316,6 @@ func handleGetRoomDetails(db *sqlx.DB, store *session.Store) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Cannot get participants for room ID: %d. %s", roomId, err))
 		}
 
-		// TODO: This is just for testing the decryption, don't actually show the email on the page
-		// for i := range participants {
-		//     decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
-		//     if err != nil {
-		//         log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
-		//         continue // or return, depending on how you want to handle the error
-		//     }
-		//     participants[i].Email = decryptedEmail
-		// }
-
 		return c.Render("room-details", fiber.Map{
 			"Room":         room,
 			"Participants": participants,
@@ -427,28 +417,6 @@ func AssignSecretSanta(participants []Participant) ([]Assignment, error) {
     return assignments, nil
 }
 
-// func sendEmail(assignment Assignment) error {
-//     from := mail.NewEmail("Raul", "noreply@titkowosmikuwulas.com")
-//     subject := "Titkowos Mikuwulasod :3"
-//     to := mail.NewEmail(assignment.Participant.Name, assignment.Participant.Email)
-    
-// 	plainTextContent := fmt.Sprintf("Hello %s, your Secret Santa giftee is: %s", assignment.Participant.Name, assignment.GifteeName)
-//     htmlContent := fmt.Sprintf("<strong>Hello %s,</strong><p>Your Secret Santa giftee is: %s</p>", assignment.Participant.Name, assignment.GifteeName)
-    
-// 	message := mail.NewSingleEmail(from, subject, to, plainTextContent, htmlContent)
-//     client := sendgrid.NewSendClient(os.Getenv("SENDGRID_API_KEY"))
-    
-// 	response, err := client.Send(message)
-    
-// 	if err != nil {
-//         return err
-//     }
-   
-// 	log.Println("Email Sent to:", assignment.Participant.Email, "Status Code:", response.StatusCode)
-    
-// 	return nil
-// }
-
 func sendEmail(assignment Assignment) error {
     // Sender and recipient information
     from := mail.NewEmail("Raul", getEnvVar("SENDGRID_EMAIL_FROM"))
@@ -488,7 +456,7 @@ func sendEmail(assignment Assignment) error {
 
 func startScheduler(db *sqlx.DB, encryptionKey []byte) {
     c := cron.New()
-    c.AddFunc("@every 1m", func() {
+    c.AddFunc("0 * * * *", func() {
         now := time.Now().UTC().Add(time.Hour)
 		log.Println("Scheduler run:", now)
         rooms, err := dbGetAllRooms(db)
