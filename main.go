@@ -18,6 +18,9 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
+	"github.com/sendgrid/sendgrid-go"
+    "github.com/sendgrid/sendgrid-go/helpers/mail"
+	"github.com/robfig/cron/v3"
 	"io"
 	"log"
 	"os"
@@ -40,6 +43,7 @@ const (
             name VARCHAR(255) UNIQUE,
             join_password VARCHAR(255) NOT NULL,
             admin_password VARCHAR(255) NOT NULL,
+			draw_completed BOOL NOT NULL DEFAULT FALSE,
             deadline TIMESTAMP DEFAULT '{{.DefaultDeadline}}',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -54,35 +58,6 @@ const (
             UNIQUE (room_id, email),
             UNIQUE (room_id, name)
         );
-
-        -- Insert test data for rooms
-        INSERT INTO room (name, join_password, admin_password)
-        VALUES 
-            ('Room 1', 'join1', 'admin1'),
-            ('Room 2', 'join2', 'admin2'),
-            ('Room 3', 'join3', 'admin3');
-
-        -- Insert test data for participants in each room
-        INSERT INTO participant (room_id, email, name, participant_password)
-        VALUES 
-            (1, 'participant1a@example.com', 'Participant 1A', 'password1A'),
-            (1, 'participant1b@example.com', 'Participant 1B', 'password1B'),
-            (1, 'participant1c@example.com', 'Participant 1C', 'password1C'),
-            (1, 'participant1d@example.com', 'Participant 1D', 'password1D');
-
-        INSERT INTO participant (room_id, email, name, participant_password)
-        VALUES 
-            (2, 'participant2a@example.com', 'Participant 2A', 'password2A'),
-            (2, 'participant2b@example.com', 'Participant 2B', 'password2B'),
-            (2, 'participant2c@example.com', 'Participant 2C', 'password2C'),
-            (2, 'participant2d@example.com', 'Participant 2D', 'password2D');
-
-        INSERT INTO participant (room_id, email, name, participant_password)
-        VALUES 
-            (3, 'participant3a@example.com', 'Participant 3A', 'password3A'),
-            (3, 'participant3b@example.com', 'Participant 3B', 'password3B'),
-            (3, 'participant3c@example.com', 'Participant 3C', 'password3C'),
-            (3, 'participant3d@example.com', 'Participant 3D', 'password3D');
     `
 )
 
@@ -94,6 +69,7 @@ type Room struct {
 	Name          string    `db:"name"`
 	JoinPassword  string    `db:"join_password"`
 	AdminPassword string    `db:"admin_password"`
+	DrawCompleted bool      `db:"draw_completed"`
 	Deadline      time.Time `db:"deadline"`
 	CreatedAt     time.Time `db:"created_at"`
 }
@@ -256,6 +232,18 @@ func dbGetJoinPasswordForRoom(db *sqlx.DB, roomId int) (string, error) {
 	}
 
 	return storedPasswordHash, nil
+}
+
+func dbSetRoomToDrawCompleted(db *sqlx.DB, roomId int) error {
+	query := `
+	UPDATE room
+	SET draw_completed = TRUE
+	WHERE id = $1
+	`
+
+	_, err := db.Exec(query, roomId)
+
+	return err
 }
 
 /*
@@ -439,6 +427,126 @@ func AssignSecretSanta(participants []Participant) ([]Assignment, error) {
     return assignments, nil
 }
 
+// func sendEmail(assignment Assignment) error {
+//     from := mail.NewEmail("Raul", "noreply@titkowosmikuwulas.com")
+//     subject := "Titkowos Mikuwulasod :3"
+//     to := mail.NewEmail(assignment.Participant.Name, assignment.Participant.Email)
+    
+// 	plainTextContent := fmt.Sprintf("Hello %s, your Secret Santa giftee is: %s", assignment.Participant.Name, assignment.GifteeName)
+//     htmlContent := fmt.Sprintf("<strong>Hello %s,</strong><p>Your Secret Santa giftee is: %s</p>", assignment.Participant.Name, assignment.GifteeName)
+    
+// 	message := mail.NewSingleEmail(from, subject, to, plainTextContent, htmlContent)
+//     client := sendgrid.NewSendClient(os.Getenv("SENDGRID_API_KEY"))
+    
+// 	response, err := client.Send(message)
+    
+// 	if err != nil {
+//         return err
+//     }
+   
+// 	log.Println("Email Sent to:", assignment.Participant.Email, "Status Code:", response.StatusCode)
+    
+// 	return nil
+// }
+
+func sendEmail(assignment Assignment) error {
+    // Sender and recipient information
+    from := mail.NewEmail("Raul", getEnvVar("SENDGRID_EMAIL_FROM"))
+    to := mail.NewEmail(assignment.Participant.Name, assignment.Participant.Email)
+
+    // Create a new SendGrid message
+    message := mail.NewV3Mail()
+
+    // Set the 'from' address
+    message.SetFrom(from)
+
+    // Create a personalization object
+    p := mail.NewPersonalization()
+    p.AddTos(to)
+
+    // Set dynamic template data based on your template placeholders
+    p.SetDynamicTemplateData("Name", assignment.Participant.Name)
+    p.SetDynamicTemplateData("Giftee", assignment.GifteeName)
+
+    // Add personalization to the message
+    message.AddPersonalizations(p)
+
+    // Set the Template ID from SendGrid
+    templateID := getEnvVar("SENDGRID_TEMPLATE_ID")
+    message.SetTemplateID(templateID)
+
+    // Create a SendGrid client and send the message
+    client := sendgrid.NewSendClient(getEnvVar("SENDGRID_API_KEY"))
+    response, err := client.Send(message)
+    if err != nil {
+        return err
+    }
+
+    log.Println("Email Sent to:", assignment.Participant.Name, "Status Code:", response.StatusCode)
+    return nil
+}
+
+func startScheduler(db *sqlx.DB, encryptionKey []byte) {
+    c := cron.New()
+    c.AddFunc("@every 1m", func() {
+        now := time.Now().UTC().Add(time.Hour)
+		log.Println("Scheduler run:", now)
+        rooms, err := dbGetAllRooms(db)
+		log.Println("Lenrooms:", len(rooms))
+        if err != nil {
+            log.Printf("Error fetching rooms for draw: %s", err)
+            return
+        }
+
+        for _, room := range rooms {
+			log.Println("Room:", room.Name, "Deadline:", room.Deadline, "Completed:", room.DrawCompleted)
+            if now.After(room.Deadline) && !room.DrawCompleted { 
+                log.Printf("Processing draw for room: %d", room.ID)
+                
+                // Fetch participants from database
+                participants, err := dbGetParticipantsForRoom(db, room.ID)
+                if err != nil {
+                    log.Printf("Error fetching participants for room %d: %s", room.ID, err)
+                    continue
+                }
+                log.Println("Fetched participants for the draw")
+
+                // Decrypt participant emails
+                for i := range participants {
+                    decryptedEmail, err := decryptAES(encryptionKey, participants[i].Email)
+                    if err != nil {
+                        log.Printf("Error decrypting email for participant %d: %s", participants[i].ID, err)
+                        continue
+                    }
+                    participants[i].Email = decryptedEmail
+                }
+                log.Println("Decrypted participant emails")
+
+                // Assign Secret Santa
+                assignments, err := AssignSecretSanta(participants)
+                if err != nil {
+                    log.Printf("Error in assigning Secret Santa for room %d: %s", room.ID, err)
+                    continue
+                }
+                log.Println("Secret Santa assigned")
+
+                // Send emails
+                for _, assignment := range assignments {
+                    err := sendEmail(assignment)
+                    if err != nil {
+                        log.Printf("Failed to send email to %s: %s", assignment.Participant.Email, err)
+                    }
+                }
+                log.Println("Emails sent for the draw")
+
+                // Update room to indicate draw is completed
+				dbSetRoomToDrawCompleted(db, room.ID)
+            }
+        }
+    })
+    c.Start()
+}
+
 func getPort() string {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -581,6 +689,9 @@ func main() {
 
 	app.Get("/room-details/:id/join-room", handleGetJoinRoom())
 	app.Post("/room-details/:id/join-room", handlePostJoinRoom(db, decodedEncryptionKey))
+
+	// Start the scheduler
+    startScheduler(db, decodedEncryptionKey)
 
 	// Run server
 	err = app.Listen(getPort())
